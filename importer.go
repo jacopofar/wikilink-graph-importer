@@ -61,34 +61,33 @@ func links_loader(lines <-chan string, neo4j_conn* string) {
   (to:article {title:{0}})
   CREATE (from)-[r:LINKSTO]->(to)`)
 
+if err != nil {
+  log.Fatal(err)
+}
+defer stmt_insert_link.Close()
+//link structure: 5468402,0,'Auburn_(Iowa)',2
+//meaning that the article number 5468402 links to Auburn_(Iowa)
+re := regexp.MustCompile("^([0-9]+),0,'([^']+)',")
+
+for l := range lines {
+  //Go CSV parser does not support arbitrary text delimiters, and the regex to escape them use gobbling and it's a bit slow, this ugly hack avoids that
+  t := strings.Replace(l, "\\'", "  ", -1)
+  sm := re.FindStringSubmatch(t)
+  //fmt.Println(t)
+  //fmt.Println(sm)
+  if len(sm) == 0 {
+    continue
+  }
+
+  atomic.AddUint32(&processed, 1)
+  if processed % 1000 == 0 {
+    fmt.Printf(" -- imported %d links\n", processed)
+  }
+  _, err := stmt_insert_link.Query(strings.Replace(sm[2], "  ", "\\'", -1), sm[1])
   if err != nil {
     log.Fatal(err)
   }
-  defer stmt_insert_link.Close()
-  //link structure: 5468402,0,'Auburn_(Iowa)',2
-  //meaning that the article number 5468402 links to Auburn_(Iowa)
-  re := regexp.MustCompile("^([0-9]+),0,'([^']+)',")
-
-  for l := range lines {
-    //Go CSV parser does not support arbitrary text delimiters, and the regex to escape them use gobbling and it's a bit slow, this ugly hack avoids that
-    t := strings.Replace(l, "\\'", "  ", -1)
-    sm := re.FindStringSubmatch(t)
-    //fmt.Println(t)
-    //fmt.Println(sm)
-    if len(sm) == 0 {
-      continue
-    }
-
-    atomic.AddUint32(&processed, 1)
-    if processed % 1000 == 0 {
-      fmt.Printf(" -- imported %d links\n", processed)
-    }
-
-    _, err := stmt_insert_link.Query(strings.Replace(sm[2], "  ", "\\'", -1), sm[1])
-    if err != nil {
-      log.Fatal(err)
-    }
-  }
+}
 }
 
 
@@ -96,6 +95,20 @@ func main() {
   neo4j_conn := flag.String("neo4j_conn", "http://localhost:7474", "Neo4j connection string")
   pages_file := flag.String("pages_file", "enwiki-20160407-page.sql.gz", "compressed SQL file with the pages")
   links_file := flag.String("links_file", "enwiki-20160407-pagelinks.sql.gz", "compressed SQL file with the page links")
+
+  db, err := sql.Open("neo4j-cypher", *neo4j_conn)
+  if err != nil {
+    log.Println("error connecting to neo4j:", err)
+  }
+  create_index_stm, err := db.Prepare(`CREATE INDEX ON :article(title)`)
+  create_index_stm.Query()
+  create_index_stm, err = db.Prepare(`CREATE INDEX ON :article(id)`)
+  create_index_stm.Query()
+  db.Close()
+
+  if err != nil {
+    log.Fatal(err)
+  }
 
   flag.Parse()
 
@@ -135,9 +148,9 @@ func main() {
 
   fmt.Println("step 1 of 2: loading the article nodes (id and title)")
 
-  for scanner.Scan() {
-    lines <- scanner.Text()
-  }
+  //for scanner.Scan() {
+  //  lines <- scanner.Text()
+  //}
 
   close(lines)
 
@@ -163,7 +176,7 @@ func main() {
     go links_loader(lines, neo4j_conn)
   }
 
-  fmt.Println("step 1 of 2: loading the article nodes (id and title)")
+  fmt.Println("step 2 of 2: loading the article LINKSTO relationships")
   processed = 0
   for scanner.Scan() {
     lines <- scanner.Text()
