@@ -148,9 +148,9 @@ func main() {
 
   fmt.Println("step 1 of 2: loading the article nodes (id and title)")
 
-  //for scanner.Scan() {
-  //  lines <- scanner.Text()
-  //}
+  for scanner.Scan() {
+    lines <- scanner.Text()
+  }
 
   close(lines)
 
